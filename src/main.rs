@@ -1,8 +1,7 @@
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use vsop::{
-    get_emb, get_jupiter, get_ketu, get_mars, get_mercury, get_moon, get_neptune, get_rahu,
-    get_saturn, get_sun, get_uranus, get_venus,
+    calculate_ayanamsa, get_emb, get_jupiter, get_ketu, get_mars, get_mercury, get_moon, get_neptune, get_rahu, get_saturn, get_sun, get_uranus, get_venus, tropical_to_sidereal
 };
 
 ///////////////////////////////////////////////////////////////////////////
@@ -16,6 +15,8 @@ const RAD_TO_DEG: f64 = 180.0 / PI;
 const J2000: f64 = 2451545.0; // Reference epoch
 const AYANAMSA_2000: f64 = 23.8625750; // Lahiri ayanamsa at J2000
 const PRECESSION_RATE: f64 = 50.2388475 / 3600.0; // Precession rate in degrees per century
+
+ 
 
 /// Convert a Gregorian date/time to Julian Day (UTC).
 /// This is 100% accurate, and fully compliant with the Julian Day standard.
@@ -47,40 +48,9 @@ pub fn date_to_jd(year: i32, month: u32, day: u32, hour: u32, minute: u32, secon
     jd
 }
 
-/// Calculate Lahiri ayanāṃśa in **radians** for the given Julian Day.
-/// This is 100% accurate, and uses the full Lahiri formula.
-pub fn calculate_ayanamsa(jd: f64) -> f64 {
-    // Calculate Julian centuries from J2000.0
-    let t = (jd - J2000) / 36525.0;
 
-    // Lahiri ayanamsa formula
-    // Base value at J2000: 23°51'45.27"
-    let base = 23.8625750;
 
-    // Rate of precession per century: 50.2388475"
-    let rate = 50.2388475 / 3600.0; // Convert arc-seconds to degrees
-
-    // Calculate ayanamsa in degrees
-    let ayanamsa_deg = base + (rate * t);
-
-    // Convert to radians and return
-    ayanamsa_deg * DEG_TO_RAD
-}
-
-/// Convert a given *tropical* longitude (radians) to *sidereal* longitude
-/// by subtracting Lahiri ayanāṃśa, then normalizing to [0, 2π).
-pub fn tropical_to_sidereal(longitude: f64, jd: f64) -> f64 {
-    let ay = calculate_ayanamsa(jd);
-    let mut sidereal = longitude - ay;
-    // normalize
-    while sidereal < 0.0 {
-        sidereal += 2.0 * PI;
-    }
-    while sidereal >= 2.0 * PI {
-        sidereal -= 2.0 * PI;
-    }
-    sidereal
-}
+ 
 
 /// Utility: Normalize an angle to [0, 360°).
 pub fn normalize_degrees(deg: f64) -> f64 {
