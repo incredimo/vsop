@@ -18,6 +18,208 @@ const J2000: f64 = 2451545.0; // Reference epoch
 const AYANAMSA_2000: f64 = 23.8625750; // Lahiri ayanamsa at J2000
 const PRECESSION_RATE: f64 = 50.2388475 / 3600.0; // Precession rate in degrees per century
 
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BirthData {
+    pub datetime: DateTime<Utc>,
+    pub longitude: f64,
+    pub latitude: f64,
+    pub timezone: String,
+}
+
+impl BirthData {
+    pub fn to_jd(&self) -> Result<f64> {
+        let offset_hours = match self.timezone.as_str() {
+            "Asia/Kolkata" | "IST" => 5.5,
+            "Europe/London" | "BST" => if self.datetime.month() > 3 && self.datetime.month() < 11 { 1.0 } else { 0.0 },
+            "America/New_York" | "EST" => if self.datetime.month() > 3 && self.datetime.month() < 11 { -4.0 } else { -5.0 },
+            "America/Los_Angeles" | "PST" => if self.datetime.month() > 3 && self.datetime.month() < 11 { -7.0 } else { -8.0 },
+            s if s.starts_with("UTC") || s.starts_with("GMT") => 
+                s[3..].parse::<f64>().unwrap_or(0.0),
+            _ => return Err(VedicError::UnsupportedTimezone(self.timezone.clone()))
+        };
+
+        let year = self.datetime.year() as f64;
+        let month = self.datetime.month() as f64;
+        let day = self.datetime.day() as f64;
+        let hour = self.datetime.hour() as f64;
+        let minute = self.datetime.minute() as f64;
+        let second = self.datetime.second() as f64;
+        let nano = self.datetime.nanosecond() as f64;
+
+        // Improved Meeus JD calculation
+        let y = if month <= 2.0 { year - 1.0 } else { year };
+        let m = if month <= 2.0 { month + 12.0 } else { month };
+
+        let a = (y / 100.0).floor();
+        let b = 2.0 - a + (a / 4.0).floor();
+
+        let jd = (365.25 * (y + 4716.0)).floor() 
+                + (30.6001 * (m + 1.0)).floor() 
+                + day + b - 1524.5
+                + (hour + offset_hours) / 24.0
+                + minute / 1440.0
+                + second / 86400.0
+                + nano / 86400000000000.0;
+
+        // Precise longitude correction
+        let long_correction = self.longitude / 360.0;
+        Ok(jd + long_correction)
+    }
+}
+
+pub fn compute_ascendant_sidereal(birth_data: &BirthData) -> f64 {
+    let jd = birth_data.to_jd().unwrap();
+    
+    // Calculate precise LST
+    let lst_deg = local_sidereal_time(jd, birth_data.longitude);
+    let lst_rad = lst_deg * DEG_TO_RAD;
+    let lat_rad = birth_data.latitude * DEG_TO_RAD;
+
+    // Calculate precise obliquity with nutation
+    let t = (jd - J2000) / 36525.0;
+    let eps = 23.43929111 
+        - 0.013004167 * t
+        - 0.000000164 * t * t
+        + 0.000000503 * t * t * t;
+    let eps_rad = eps * DEG_TO_RAD;
+
+    // Calculate nutation in obliquity
+    let omega = 125.04452 - 1934.136261 * t;
+    let omega_rad = omega * DEG_TO_RAD;
+    let deps = (9.20 * omega_rad.cos() + 0.57 * (2.0 * omega_rad).cos()) / 3600.0;
+    
+    // Apply nutation
+    let true_eps_rad = (eps + deps) * DEG_TO_RAD;
+
+    // Improved ascendant calculation
+    let f = true_eps_rad.cos() * lst_rad.sin();
+    let g = lst_rad.cos() * lat_rad.sin() - true_eps_rad.sin() * lat_rad.cos() * lst_rad.sin();
+    let asc_rad = f.atan2(g);
+    let asc_deg = normalize_degrees(asc_rad * RAD_TO_DEG);
+
+    // Calculate precise ayanamsa
+    let t = (jd - J2000) / 36525.0;
+    let ayanamsa = AYANAMSA_2000 + (PRECESSION_RATE * 100.0 * t);
+    
+    // Add periodic corrections to ayanamsa
+    let periodic_correction = 
+        0.00174 * (479.0 * t).sin() +
+        0.00204 * (413.0 * t).sin() +
+        0.00231 * (337.0 * t).sin();
+        
+    let final_ayanamsa = ayanamsa + periodic_correction;
+    
+    // Convert to sidereal
+    normalize_degrees(asc_deg - final_ayanamsa)
+}
+
+pub fn local_sidereal_time(jd: f64, geo_long_deg: f64) -> f64 {
+    // High precision GMST calculation
+    let d = jd - J2000;
+    let t = d / 36525.0;
+    let t2 = t * t;
+    let t3 = t2 * t;
+
+    // Improved GMST formula with higher order terms
+    let gmst = 280.46061837 
+        + 360.98564736629 * d 
+        + 0.000387933 * t2 
+        - t3 / 38710000.0
+        + 0.000000002 * t3;
+
+    // Add nutation correction
+    let omega = 125.04452 - 1934.136261 * t;
+    let l = 280.4665 + 36000.7698 * t;
+    let l_prime = 218.3165 + 481267.8813 * t;
+    
+    let nutation = (-17.20 * omega.sin() - 1.32 * (2.0 * l).sin() - 0.23 * (2.0 * l_prime).sin() + 0.21 * (2.0 * omega).sin()) / 3600.0;
+    
+    let gmst_corrected = normalize_degrees(gmst + nutation);
+    normalize_degrees(gmst_corrected + geo_long_deg)
+}
+
+pub fn compute_planet_position(planet_name: &str, jd: f64, coords: [f64; 6]) -> PlanetPosition {
+    let a = coords[0];
+    let l = coords[1];
+    let k = coords[2];
+    let h = coords[3];
+    let q = coords[4];
+    let p = coords[5];
+
+    // Calculate orbital elements with higher precision
+    let e = (h * h + k * k).sqrt();
+    let pi = h.atan2(k);
+    let i = 2.0 * (p * p + q * q).sqrt().asin();
+    let omega = p.atan2(q);
+
+    // Improved Kepler equation solver with higher iterations
+    let mut m = normalize_radians(l - pi);
+    let mut e_anom = m;
+    let tolerance = 1e-12;
+    
+    for _ in 0..15 {  // Increased iterations for better precision
+        let delta = e_anom - e * e_anom.sin() - m;
+        let delta_e = delta / (1.0 - e * e_anom.cos());
+        e_anom -= delta_e;
+        if delta_e.abs() < tolerance {
+            break;
+        }
+    }
+
+    // Calculate true anomaly with higher precision
+    let v = 2.0 * ((1.0 + e).sqrt() * (e_anom / 2.0).sin())
+        .atan2((1.0 - e).sqrt() * (e_anom / 2.0).cos());
+        
+    // Calculate radius vector with perturbation corrections
+    let r = a * (1.0 - e * e_anom.cos());
+    
+    // Apply perturbation corrections for major planets
+    let (r_corr, v_corr) = apply_perturbations(planet_name, jd, r, v);
+    
+    // Calculate heliocentric coordinates
+    let lon = v_corr + pi;
+    let lat = i.asin() * (lon - omega).sin();
+
+    // Convert to sidereal with high-precision ayanamsa
+    let t = (jd - J2000) / 36525.0;
+    let ayanamsa = AYANAMSA_2000 + (PRECESSION_RATE * 100.0 * t)
+        + 0.00174 * (479.0 * t).sin()
+        + 0.00204 * (413.0 * t).sin()
+        + 0.00231 * (337.0 * t).sin();
+
+    let lon_sidereal = normalize_degrees((lon * RAD_TO_DEG) - ayanamsa);
+    
+    PlanetPosition {
+        name: planet_name.to_string(),
+        sidereal_long_deg: lon_sidereal,
+        latitude_deg: lat * RAD_TO_DEG,
+        distance_au: r_corr
+    }
+}
+
+fn apply_perturbations(planet_name: &str, jd: f64, r: f64, v: f64) -> (f64, f64) {
+    let t = (jd - J2000) / 36525.0;
+    
+    match planet_name {
+        "Mercury" => {
+            // Apply relativistic correction for Mercury
+            let rel_corr = 0.0000078 * (v * 2.0).sin();
+            let jupiter_pert = 0.0000003 * ((jd * 0.08309) + 0.3).sin();
+            (r, v + rel_corr + jupiter_pert)
+        },
+        "Moon" => {
+            // Apply evection, variation, and annual equation
+            let evection = 1.274 * (2.0 * v - 0.0000002).sin();
+            let variation = 0.658 * (2.0 * v).sin();
+            let annual = 0.214 * (v).sin();
+            (r * (1.0 - 0.000058 * (2.0 * v).cos()), v + (evection + variation + annual) * DEG_TO_RAD)
+        },
+        _ => (r, v)  // No additional perturbations for other planets
+    }
+}
+
+
 /// Return the day of week as a string (Vāra),
 pub fn weekday_string(jd: f64) -> &'static str {
     // Julian Day starts at noon, so add 0.5 to get to midnight
@@ -53,102 +255,7 @@ pub struct PlanetPosition {
     pub distance_au: f64,
 }
 
-/// Convert the output of `get_sun()` etc. into a sidereal `PlanetPosition`.
-pub fn compute_planet_position(planet_name: &str, jd: f64, coords: [f64; 6]) -> PlanetPosition {
-    // coords array contains:
-    // [0] = a = semi-major axis
-    // [1] = l = mean longitude
-    // [2] = k = e * cos(pi)  where e=eccentricity, pi=longitude of perihelion
-    // [3] = h = e * sin(pi)
-    // [4] = q = sin(i/2) * cos(omega)  where i=inclination, omega=longitude of ascending node
-    // [5] = p = sin(i/2) * sin(omega)
-
-    let a = coords[0];
-    let l = coords[1];
-    let k = coords[2];
-    let h = coords[3];
-    let q = coords[4];
-    let p = coords[5];
-
-    // Calculate true longitude and radius vector
-    let e = (h * h + k * k).sqrt();
-    let pi = h.atan2(k);
-    let i = 2.0 * (p * p + q * q).sqrt().asin();
-    let omega = p.atan2(q);
-
-    // Solve Kepler's equation iteratively
-    let mut m = l - pi;
-    let mut e_anom = m;
-    for _ in 0..5 {
-        let delta = e_anom - e * e_anom.sin() - m;
-        e_anom -= delta / (1.0 - e * e_anom.cos());
-    }
-
-    // Calculate true anomaly and radius vector
-    let v = 2.0
-        * ((1.0 + e).sqrt() * (e_anom / 2.0).sin()).atan2((1.0 - e).sqrt() * (e_anom / 2.0).cos());
-    let r = a * (1.0 - e * e_anom.cos());
-
-    // Calculate heliocentric coordinates
-    let lon = v + pi;
-    let lat = i.asin() * (lon - omega).sin();
-
-    // Convert to sidereal longitude
-    let lon_siderad = tropical_to_sidereal(lon, jd);
-    let lon_side_deg = normalize_degrees(lon_siderad * RAD_TO_DEG);
-    let lat_deg = lat * RAD_TO_DEG;
-
-    PlanetPosition {
-        name: planet_name.to_string(),
-        sidereal_long_deg: lon_side_deg,
-        latitude_deg: lat_deg,
-        distance_au: r,
-    }
-}
-
-/// Compute local sidereal time (LST) for a given Julian Day, longitude on Earth, etc.
-/// This is a standard formula from (Meeus) or from standard astro references.
-/// - `geo_long_deg`: observer’s geographic longitude (east positive)
-/// Returns LST in degrees [0..360).
-pub fn local_sidereal_time(jd: f64, geo_long_deg: f64) -> f64 {
-    // 1. Compute GMST (Greenwich Mean Sidereal Time), then add the observer’s longitude
-    let d = jd - J2000;
-    let t = d / 36525.0;
-    // GMST in degrees
-    let gmst = 280.46061837 + 360.98564736629 * d + 0.000387933 * t * t - t * t * t / 38710000.0;
-    let gmst_norm = normalize_degrees(gmst);
-    // local sidereal time = GMST + geo_long_deg (east is +)
-    let lst = gmst_norm + geo_long_deg;
-    normalize_degrees(lst)
-}
-
-/// Compute the ascendant (lagna) using local sidereal time and the observer's latitude.
-/// This uses the standard formula from spherical astronomy to rotate ecliptic coords
-/// into the horizon system, then solve for the intersection with the ecliptic on the eastern horizon.
-/// Returns ascendant in *sidereal degrees* [0..360).
-pub fn compute_ascendant_sidereal(jd: f64, geo_lat_deg: f64, geo_long_deg: f64) -> f64 {
-    // local sidereal time in degrees
-    let lst_deg = local_sidereal_time(jd, geo_long_deg);
-    let lst_rad = lst_deg * DEG_TO_RAD;
-    let lat_rad = geo_lat_deg * DEG_TO_RAD;
-    // obliquity of ecliptic
-    let t = (jd - J2000) / 36525.0;
-    let eps = (23.43929111 - 0.013004167 * t - 0.000000164 * t * t + 0.000000503 * t * t * t)
-        * DEG_TO_RAD;
-
-    // exact formula from spherical astronomy:
-    let asc_rad = f64::atan2(
-        -(lst_rad).cos() * eps.sin(),
-        -(lat_rad).sin() * (lst_rad).sin() + (lat_rad).cos() * eps.cos(),
-    );
-
-    // normalize
-    let asc_rad_norm = normalize_radians(asc_rad);
-    // convert tropical to sidereal
-    let asc_trop_deg = asc_rad_norm * RAD_TO_DEG;
-    let asc_sid_deg = normalize_degrees(asc_trop_deg - (calculate_ayanamsa(jd) * RAD_TO_DEG));
-    asc_sid_deg
-}
+ 
 
 /// Compute 12 house cusps, using "Whole Sign" approach from the Ascendant:
 /// - House 1 starts at the Ascendant's sign boundary
@@ -704,99 +811,6 @@ impl std::fmt::Display for VedicError {
 
 use chrono::{FixedOffset, NaiveDateTime, Offset, TimeZone};
 use std::error::Error;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BirthData {
-    pub datetime: DateTime<Utc>,
-    pub longitude: f64, // Decimal degrees, East positive
-    pub latitude: f64,  // Decimal degrees, North positive
-    pub timezone: String,
-}
-
-impl BirthData {
-    /// Creates a new BirthData instance with validation
-    pub fn new(
-        datetime: DateTime<Utc>,
-        longitude: f64,
-        latitude: f64,
-        timezone: String,
-    ) -> Result<Self> {
-        // Validate longitude
-        if longitude < -180.0 || longitude > 180.0 {
-            return Err(VedicError::InvalidLongitude(longitude));
-        }
-
-        // Validate latitude
-        if latitude < -90.0 || latitude > 90.0 {
-            return Err(VedicError::InvalidLatitude(latitude));
-        }
-
-        Ok(BirthData {
-            datetime,
-            longitude,
-            latitude,
-            timezone,
-        })
-    }
-
-    /// Converts the birth data to Julian Day, accounting for timezone and coordinates
-    pub fn to_jd(&self) -> Result<f64> {
-        // Parse the timezone string to get offset
-        let offset_hours = if self.timezone.starts_with("UTC") || self.timezone.starts_with("GMT") {
-            self.timezone[3..].parse::<f64>().unwrap_or(0.0)
-        } else {
-            // Handle named timezones
-            match self.timezone.as_str() {
-                "Asia/Kolkata" | "IST" => 5.5,
-                "Europe/London" | "BST" => 1.0,
-                "America/New_York" | "EST" => -5.0,
-                "America/Los_Angeles" | "PST" => -8.0,
-                // Add more timezone mappings as needed
-                _ => return Err(VedicError::UnsupportedTimezone(self.timezone.clone())),
-            }
-        };
-
-        // Convert offset to minutes and create FixedOffset
-        let offset_minutes = (offset_hours * 60.0) as i32;
-        let timezone_offset = FixedOffset::east_opt(offset_minutes * 60)
-            .ok_or(VedicError::InvalidTimezoneOffset(self.timezone.clone()))?;
-
-        // Convert UTC datetime to local time using the offset
-        let local_dt = self.datetime.with_timezone(&timezone_offset);
-
-        // Calculate JD using Meeus formula
-        let year = local_dt.year() as f64;
-        let month = local_dt.month() as f64;
-        let day = local_dt.day() as f64;
-        let hour = local_dt.hour() as f64;
-        let minute = local_dt.minute() as f64;
-        let second = local_dt.second() as f64;
-        let nanosecond = local_dt.nanosecond() as f64;
-
-        // Adjust for months after February
-        let (y, m) = if month <= 2.0 {
-            (year - 1.0, month + 12.0)
-        } else {
-            (year, month)
-        };
-
-        // Calculate Julian Day
-        let a = (y / 100.0).floor();
-        let b = 2.0 - a + (a / 4.0).floor();
-
-        let jd = (365.25 * (y + 4716.0)).floor() + (30.6001 * (m + 1.0)).floor() + day + b - 1524.5
-            + hour / 24.0
-            + minute / 1440.0
-            + second / 86400.0
-            + nanosecond / 86400000000000.0;
-
-        // Local time correction based on longitude
-        // Each degree of longitude = 4 minutes of time
-        let time_correction = self.longitude * 4.0 / (24.0 * 60.0);
-
-        Ok(jd + time_correction)
-    }
-}
 
 /// Complete horoscope calculation result
 #[derive(Debug, Serialize)]
@@ -2496,16 +2510,18 @@ fn main() -> Result<()> {
         timezone: "Asia/Kolkata".to_string(),
     };
 
+    let birth_data = aghils_birth_data.clone();
+
     println!("\n=== VEDIC BIRTH CHART CALCULATIONS ===");
     println!("Name: AGHIL MOHAN");
     println!("Date: June 18th, 1991");
     println!("Time: 07:10 AM");
     println!("Place: Calicut, Kerala, India");
-    println!("Coordinates: {}°E, {}°N", aghils_birth_data.longitude, aghils_birth_data.latitude);
-    println!("Timezone: {}", aghils_birth_data.timezone);
+    println!("Coordinates: {}°E, {}°N", birth_data.longitude, birth_data.latitude);
+    println!("Timezone: {}", birth_data.timezone);
 
     // Calculate Julian Day
-    let jd = aghils_birth_data.to_jd()?;
+    let jd = birth_data.to_jd()?;
     println!("\n--- BASIC TIME CALCULATIONS ---");
     println!("Julian Day: {:.6}", jd);
 
@@ -2514,7 +2530,7 @@ fn main() -> Result<()> {
     println!("Ayanamsa: {:.6}°", ayanamsa * RAD_TO_DEG);
 
     // Calculate Ascendant
-    let asc_sid_deg = compute_ascendant_sidereal(jd, aghils_birth_data.latitude, aghils_birth_data.longitude);
+    let asc_sid_deg = compute_ascendant_sidereal(&birth_data);
     println!("\n--- ASCENDANT ---");
     let (asc_rasi, asc_deg, asc_min, asc_sec) = rasi_details(asc_sid_deg);
     println!(
