@@ -21,23 +21,16 @@ const PRECESSION_RATE: f64 = 50.2388475 / 3600.0; // Precession rate in degrees 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BirthData {
+    //this is the datetime of birth in UTC
     pub datetime: DateTime<Utc>,
     pub longitude: f64,
     pub latitude: f64,
-    pub timezone: String,
+ 
 }
 
 impl BirthData {
     pub fn to_jd(&self) -> Result<f64> {
-        let offset_hours = match self.timezone.as_str() {
-            "Asia/Kolkata" | "IST" => 5.5,
-            "Europe/London" | "BST" => if self.datetime.month() > 3 && self.datetime.month() < 11 { 1.0 } else { 0.0 },
-            "America/New_York" | "EST" => if self.datetime.month() > 3 && self.datetime.month() < 11 { -4.0 } else { -5.0 },
-            "America/Los_Angeles" | "PST" => if self.datetime.month() > 3 && self.datetime.month() < 11 { -7.0 } else { -8.0 },
-            s if s.starts_with("UTC") || s.starts_with("GMT") => 
-                s[3..].parse::<f64>().unwrap_or(0.0),
-            _ => return Err(VedicError::UnsupportedTimezone(self.timezone.clone()))
-        };
+       
 
         let year = self.datetime.year() as f64;
         let month = self.datetime.month() as f64;
@@ -57,7 +50,7 @@ impl BirthData {
         let jd = (365.25 * (y + 4716.0)).floor() 
                 + (30.6001 * (m + 1.0)).floor() 
                 + day + b - 1524.5
-                + (hour + offset_hours) / 24.0
+                + (hour) / 24.0
                 + minute / 1440.0
                 + second / 86400.0
                 + nano / 86400000000000.0;
@@ -65,6 +58,13 @@ impl BirthData {
         // Precise longitude correction
         let long_correction = self.longitude / 360.0;
         Ok(jd + long_correction)
+    }
+
+    pub fn with_custom_timezone(&self, timezone: chrono_tz::Tz) -> Self {
+        let datetime = self.datetime.with_timezone(&timezone);
+         //get utc time
+        let utc_time = datetime.to_utc();
+        Self { datetime: utc_time, longitude: self.longitude, latitude: self.latitude }
     }
 }
 
@@ -2507,7 +2507,6 @@ fn main() -> Result<()> {
         datetime: Calcutta.with_ymd_and_hms(1991, 6, 18, 7, 10, 00).unwrap().to_utc(),
         longitude: 76.97,
         latitude: 10.80,
-        timezone: "Asia/Kolkata".to_string(),
     };
 
     let birth_data = aghils_birth_data.clone();
@@ -2518,7 +2517,6 @@ fn main() -> Result<()> {
     println!("Time: 07:10 AM");
     println!("Place: Calicut, Kerala, India");
     println!("Coordinates: {}°E, {}°N", birth_data.longitude, birth_data.latitude);
-    println!("Timezone: {}", birth_data.timezone);
 
     // Calculate Julian Day
     let jd = birth_data.to_jd()?;
