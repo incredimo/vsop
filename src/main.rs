@@ -289,31 +289,46 @@ pub fn compute_whole_sign_houses(asc_sid_deg: f64) -> [f64; 12] {
 
     house_cusps
 }
-
 /// Return which rāśi (sign) a given sidereal longitude (deg) is in, plus
 /// the degrees/minutes/seconds within that sign.  
 pub fn rasi_details(lon_deg: f64) -> (String, u32, u32, f64) {
     let sign_names = [
-        "Mesha (Aries)",
-        "Vrishabha (Taurus)",
+        "Meṣa (Aries)",
+        "Vṛṣabha (Taurus)", 
         "Mithuna (Gemini)",
         "Karka (Cancer)",
-        "Simha (Leo)",
-        "Kanya (Virgo)",
-        "Tula (Libra)",
-        "Vrischika (Scorpio)",
-        "Dhanus (Sagittarius)",
+        "Siṃha (Leo)",
+        "Kanyā (Virgo)",
+        "Tulā (Libra)",
+        "Vṛścika (Scorpio)",
+        "Dhanuṣ (Sagittarius)",
         "Makara (Capricorn)",
         "Kumbha (Aquarius)",
-        "Meena (Pisces)",
+        "Mīna (Pisces)",
     ];
-    let sign_idx = (lon_deg / 30.0).floor() as usize % 12;
+    
+    // Normalize input to 0-360 range
+    let normalized_lon = lon_deg.rem_euclid(360.0);
+    
+    // Calculate sign index (0-11)
+    let sign_idx = (normalized_lon / 30.0).floor() as usize;
+    
+    // Get sign name
     let sign_name = sign_names[sign_idx].to_string();
-    let degrees_in_sign = lon_deg - (sign_idx as f64 * 30.0);
+    
+    // Calculate degrees within sign (0-29.999...)
+    let degrees_in_sign = normalized_lon - (sign_idx as f64 * 30.0);
+    
+    // Extract whole degrees
     let d_whole = degrees_in_sign.floor() as u32;
+    
+    // Calculate minutes
     let m_f = (degrees_in_sign - d_whole as f64) * 60.0;
     let m_whole = m_f.floor() as u32;
+    
+    // Calculate seconds 
     let s_f = (m_f - m_whole as f64) * 60.0;
+    
     (sign_name, d_whole, m_whole, s_f)
 }
 
@@ -2500,253 +2515,257 @@ fn is_debilitated(planet: &PlanetPosition) -> bool {
 }
 
 use chrono_tz::Asia::{Calcutta, Kolkata};
+ 
+use prettytable::{format::{self, TableFormat}, Cell, Row, Table};
+use colored::*;
 
 fn main() -> Result<()> {
-    // Aghil Born 18th June 1991 07:10 AM IST Calicut, Kerala, India (76.97°E, 10.80°N)
+    // Create birth data for Aghil
     let aghils_birth_data: BirthData = BirthData {
-        datetime: Calcutta.with_ymd_and_hms(1991, 6, 18, 7, 10, 00).unwrap().to_utc(),
+        datetime: Calcutta
+            .with_ymd_and_hms(1991, 6, 18, 7, 10, 00)
+            .unwrap()
+            .to_utc(),
         longitude: 76.97,
         latitude: 10.80,
     };
 
     let birth_data = aghils_birth_data.clone();
-
-    println!("\n=== VEDIC BIRTH CHART CALCULATIONS ===");
-    println!("Name: AGHIL MOHAN");
-    println!("Date: June 18th, 1991");
-    println!("Time: 07:10 AM");
-    println!("Place: Calicut, Kerala, India");
-    println!("Coordinates: {}°E, {}°N", birth_data.longitude, birth_data.latitude);
-
-    // Calculate Julian Day
     let jd = birth_data.to_jd()?;
-    println!("\n--- BASIC TIME CALCULATIONS ---");
-    println!("Julian Day: {:.6}", jd);
-
-    // Calculate Ayanamsa
     let ayanamsa = calculate_ayanamsa(jd);
-    println!("Ayanamsa: {:.6}°", ayanamsa * RAD_TO_DEG);
-
-    // Calculate Ascendant
     let asc_sid_deg = compute_ascendant_sidereal(&birth_data);
-    println!("\n--- ASCENDANT ---");
-    let (asc_rasi, asc_deg, asc_min, asc_sec) = rasi_details(asc_sid_deg);
-    println!(
-        "Ascendant: {} {}°{}'{:.1}\"",
-        asc_rasi, asc_deg, asc_min, asc_sec
-    );
-
-    // Calculate all planetary positions
     let planets = compute_all_planets(jd)?;
+ 
 
-    println!("\n--- PLANETARY POSITIONS ---");
+
+    println!("\n{}", "=== VEDIC BIRTH CHART ANALYSIS ===".bold());
+    println!("{}", "--------------------------------".bold());
+    
+    // Basic Information Table
+    let mut basic_info = Table::new();
+    basic_info.set_format(*format::consts::FORMAT_BOX_CHARS);
+    basic_info.add_row(Row::new(vec![
+        Cell::new("Name"),
+        Cell::new("AGHIL MOHAN"),
+    ]));
+    basic_info.add_row(Row::new(vec![
+        Cell::new("Date"),
+        Cell::new("June 18th, 1991"),
+    ]));
+    basic_info.add_row(Row::new(vec![
+        Cell::new("Time"),
+        Cell::new("07:10 AM IST"),
+    ]));
+    basic_info.add_row(Row::new(vec![
+        Cell::new("Place"),
+        Cell::new("Calicut, Kerala, India"),
+    ]));
+    basic_info.add_row(Row::new(vec![
+        Cell::new("Coordinates"),
+        Cell::new(&format!("{}°E, {}°N", birth_data.longitude, birth_data.latitude)),
+    ]));
+    basic_info.printstd();
+
+    // Technical Details Table
+    println!("\n{}", "Technical Details".bold());
+    let mut tech_details = Table::new();
+    tech_details.set_format(*format::consts::FORMAT_BOX_CHARS);
+    tech_details.add_row(Row::new(vec![
+        Cell::new("Julian Day"),
+        Cell::new(&format!("{:.6}", jd)),
+    ]));
+    tech_details.add_row(Row::new(vec![
+        Cell::new("Ayanamsa"),
+        Cell::new(&format!("{:.6}°", ayanamsa * RAD_TO_DEG)),
+    ]));
+    tech_details.printstd();
+
+    // Ascendant Details
+    println!("\n{}", "Ascendant Details".bold());
+    let (asc_rasi, asc_deg, asc_min, asc_sec) = rasi_details(asc_sid_deg);
+    let mut asc_table = Table::new();
+    asc_table.set_format(*format::consts::FORMAT_BOX_CHARS);
+    asc_table.add_row(Row::new(vec![
+        Cell::new("Sign"),
+        Cell::new(&asc_rasi),
+    ]));
+    asc_table.add_row(Row::new(vec![
+        Cell::new("Position"),
+        Cell::new(&format!("{}°{}'{:.1}\"", asc_deg, asc_min, asc_sec)),
+    ]));
+    asc_table.printstd();
+
+    // Planetary Positions with House Placements
+    println!("\n{}", "Planetary Positions".bold());
+    let mut planet_table = Table::new();
+    planet_table.set_titles(Row::new(vec![
+        Cell::new("Planet").style_spec("b"),
+        Cell::new("Sign").style_spec("b"),
+        Cell::new("Position").style_spec("b"),
+        Cell::new("House").style_spec("b"),
+        Cell::new("Dignity").style_spec("b"),
+    ]));
+
     for planet in &planets {
-        let (rasi, deg, min, sec) = rasi_details(planet.sidereal_long_deg);
-        println!("{:<8}: {} {}°{}'{:.1}\"", planet.name, rasi, deg, min, sec);
-    }
-
-    // Calculate Panchanga
-    let panchanga = compute_panchanga(jd);
-    println!("\n--- PANCHANGA ---");
-    println!("Tithi: {} {}", panchanga.tithi_number, panchanga.paksha);
-    println!("Vara (Weekday): {}", panchanga.weekday);
-    println!(
-        "Nakshatra: {} ({})",
-        panchanga.nakshatra_name, panchanga.nakshatra_index
-    );
-    println!("Yoga: {} ({})", panchanga.yoga_name, panchanga.yoga_index);
-    println!(
-        "Karana: {} ({})",
-        panchanga.karana_name, panchanga.karana_index
-    );
-
-    // Calculate House Cusps
-    let houses = compute_whole_sign_houses(asc_sid_deg);
-    println!("\n--- HOUSE CUSPS ---");
-    for (i, &cusp) in houses.iter().enumerate() {
-        let (rasi, deg, min, sec) = rasi_details(cusp);
-        println!("House {:<2}: {} {}°{}'{:.1}\"", i + 1, rasi, deg, min, sec);
-    }
-
-    // Calculate Divisional Charts (D1-D9)
-    println!("\n--- DIVISIONAL CHARTS ---");
-
-    if let Ok(divisional_charts) = calculate_all_divisional_charts(&planets, asc_sid_deg) {
-        for chart in divisional_charts.into_iter() {
-            println!("−−−−–−−−−–−−−−– {} −−−−–−−−−–−−−−–", chart.name);
-            for planet in chart.planets {
-                println!("{:<8}: {:.2}", planet.0, planet.1);
-            }
-            println!("−−−−–−−−−–−−−−–−−−−–−−−−–−−−−–−−−−–");
-        }
-    }
-
-    // D1 - Rashi
-    println!("\nD1 (Rashi) Positions:");
-    for planet in &planets {
-        let rasi = compute_rasi(planet.sidereal_long_deg);
-        println!("{:<8}: {}", planet.name, rasi);
-    }
-
-    // D2 - Hora
-    println!("\nD2 (Hora) Positions:");
-    for planet in &planets {
-        let hora = compute_hora(planet.sidereal_long_deg);
-        println!("{:<8}: {}", planet.name, hora);
-    }
-
-    // D3 - Drekkana
-    println!("\nD3 (Drekkana) Positions:");
-    for planet in &planets {
-        let drekkana = compute_drekkana(planet.sidereal_long_deg);
-        println!("{:<8}: {}", planet.name, drekkana);
-    }
-
-    // D9 - Navamsa
-    println!("\nD9 (Navamsa) Positions:");
-    for planet in &planets {
-        let navamsa = compute_navamsa(planet.sidereal_long_deg);
-        println!("{:<8}: {}", planet.name, navamsa);
-    }
-
-    // Calculate Planetary Strengths
-    println!("\n--- PLANETARY STRENGTHS ---");
-    println!(
-        "{:<10} ST   |   DB   |   KB   |   DB   |   NS   |   TS  ",
-        "Planet"
-    );
-    for planet in &planets {
-        if planet.name == "Sun"
-            || planet.name == "Moon"
-            || planet.name == "Rahu"
-            || planet.name == "Ketu"
-        {
+        if planet.name == "Sun" || planet.name == "Moon" || planet.name == "Rahu" || planet.name == "Ketu" {
             continue;
         }
-        let strength = calculate_shadbala(planet, jd, asc_sid_deg)?;
-        println!(
-            "{:<10} {:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {:.2}",
-            planet.name,
-            strength.sthan_bala,
-            strength.dig_bala,
-            strength.kala_bala,
-            strength.drik_bala,
-            strength.naisargika_bala,
-            strength.total
-        );
+        let (rasi, deg, min, sec) = rasi_details(planet.sidereal_long_deg);
+        let house = ((planet.sidereal_long_deg - asc_sid_deg) / 30.0).floor() as i32 % 12 + 1;
+        let dignity = calculate_dignity(planet)?;
+        let dignity_status = if dignity.exalted {
+            "Exalted"
+        } else if dignity.own_sign {
+            "Own Sign"
+        } else if dignity.debilitated {
+            "Debilitated"
+        } else if dignity.friendly_sign {
+            "Friendly"
+        } else if dignity.enemy_sign {
+            "Enemy Sign"
+        } else {
+            "Neutral"
+        };
+
+        planet_table.add_row(Row::new(vec![
+            Cell::new(&planet.name),
+            Cell::new(&rasi),
+            Cell::new(&format!("{}°{}'{:.1}\"", deg, min, sec)),
+            Cell::new(&format!("H{}", house)),
+            Cell::new(dignity_status),
+        ]));
+    }
+    planet_table.printstd();
+
+    // Panchanga
+    println!("\n{}", "Panchanga (Five Limbs)".bold());
+    let panchanga = compute_panchanga(jd);
+    let mut panchanga_table = Table::new();
+    panchanga_table.set_format(*format::consts::FORMAT_BOX_CHARS);
+    panchanga_table.add_row(Row::new(vec![
+        Cell::new("Tithi"),
+        Cell::new(&format!("{} {}", panchanga.tithi_number, panchanga.paksha)),
+    ]));
+    panchanga_table.add_row(Row::new(vec![
+        Cell::new("Vara"),
+        Cell::new(&panchanga.weekday),
+    ]));
+    panchanga_table.add_row(Row::new(vec![
+        Cell::new("Nakshatra"),
+        Cell::new(&format!("{} ({})", panchanga.nakshatra_name, panchanga.nakshatra_index)),
+    ]));
+    panchanga_table.add_row(Row::new(vec![
+        Cell::new("Yoga"),
+        Cell::new(&format!("{} ({})", panchanga.yoga_name, panchanga.yoga_index)),
+    ]));
+    panchanga_table.add_row(Row::new(vec![
+        Cell::new("Karana"),
+        Cell::new(&format!("{} ({})", panchanga.karana_name, panchanga.karana_index)),
+    ]));
+    panchanga_table.printstd();
+
+    // House Details
+    println!("\n{}", "House Details".bold());
+    let houses = compute_whole_sign_houses(asc_sid_deg);
+    let mut house_table = Table::new();
+    house_table.set_titles(Row::new(vec![
+        Cell::new("House").style_spec("b"),
+        Cell::new("Sign").style_spec("b"),
+        Cell::new("Position").style_spec("b"),
+        Cell::new("Planets").style_spec("b"),
+    ]));
+
+    for (i, &cusp) in houses.iter().enumerate() {
+        let (rasi, deg, min, sec) = rasi_details(cusp);
+        let house_num = i + 1;
+        
+        // Get planets in this house
+        let house_planets: Vec<String> = planets
+            .iter()
+            .filter(|p| {
+                let planet_house = ((p.sidereal_long_deg - asc_sid_deg) / 30.0).floor() as usize % 12 + 1;
+                planet_house == house_num
+            })
+            .map(|p| p.name.clone())
+            .collect();
+
+        house_table.add_row(Row::new(vec![
+            Cell::new(&format!("H{}", house_num)),
+            Cell::new(&rasi),
+            Cell::new(&format!("{}°{}'{:.1}\"", deg, min, sec)),
+            Cell::new(&house_planets.join(", ")),
+        ]));
+    }
+    house_table.printstd();
+
+    // Planetary Strengths
+    println!("\n{}", "Planetary Strengths (Shadbala)".bold());
+    let mut strength_table = Table::new();
+    strength_table.set_titles(Row::new(vec![
+        Cell::new("Planet").style_spec("b"),
+        Cell::new("Sthana").style_spec("b"),
+        Cell::new("Dig").style_spec("b"),
+        Cell::new("Kala").style_spec("b"),
+        Cell::new("Drik").style_spec("b"),
+        Cell::new("Natural").style_spec("b"),
+        Cell::new("Total").style_spec("b"),
+    ]));
+
+    for planet in &planets {
+        if let Ok(strength) = calculate_shadbala(planet, jd, asc_sid_deg) {
+            strength_table.add_row(Row::new(vec![
+                Cell::new(&planet.name),
+                Cell::new(&format!("{:.2}", strength.sthan_bala)),
+                Cell::new(&format!("{:.2}", strength.dig_bala)),
+                Cell::new(&format!("{:.2}", strength.kala_bala)),
+                Cell::new(&format!("{:.2}", strength.drik_bala)),
+                Cell::new(&format!("{:.2}", strength.naisargika_bala)),
+                Cell::new(&format!("{:.2}", strength.total)),
+            ]));
+        }
+    }
+    strength_table.printstd();
+
+    // Vimsottari Dasha
+    println!("\n{}", "Vimsottari Dasha Periods".bold());
+    if let Some(moon) = planets.iter().find(|p| p.name == "Moon") {
+        if let Ok(dashas) = calculate_vimsottari_dasha(moon.sidereal_long_deg, jd) {
+            let mut dasha_table = Table::new();
+            dasha_table.set_format(*format::consts::FORMAT_BOX_CHARS);
+            dasha_table.add_row(Row::new(vec![
+                Cell::new("Maha Dasha"),
+                Cell::new(&format!("{} ({:.2} years)", dashas.maha_dasha.planet, dashas.maha_dasha.years)),
+            ]));
+            dasha_table.add_row(Row::new(vec![
+                Cell::new("Antara Dasha"),
+                Cell::new(&format!("{} ({:.2} years)", dashas.antara_dasha.planet, dashas.antara_dasha.years)),
+            ]));
+            dasha_table.add_row(Row::new(vec![
+                Cell::new("Pratyantara"),
+                Cell::new(&format!("{} ({:.2} years)", dashas.pratyantara_dasha.planet, dashas.pratyantara_dasha.years)),
+            ]));
+            dasha_table.printstd();
+        }
     }
 
-    // Calculate Vimsottari Dasha
-    let moon_pos = planets.iter().find(|p| p.name == "Moon").unwrap();
-    let dashas = calculate_vimsottari_dasha(moon_pos.sidereal_long_deg, jd)?;
+    // Yogas
+    println!("\n{}", "Active Yogas".bold());
+    if let Ok(yogas) = calculate_all_yogas(&planets, asc_sid_deg) {
+        let mut yoga_table = Table::new();
+        yoga_table.set_titles(Row::new(vec![
+            Cell::new("Yoga").style_spec("b"),
+            Cell::new("Strength").style_spec("b"),
+            Cell::new("Description").style_spec("b"),
+        ]));
 
-    println!("\n--- VIMSOTTARI DASHA ---");
-    println!(
-        "Maha Dasha: {} ({:.2} years)",
-        dashas.maha_dasha.planet, dashas.maha_dasha.years
-    );
-    println!(
-        "Antara Dasha: {} ({:.2} years)",
-        dashas.antara_dasha.planet, dashas.antara_dasha.years
-    );
-    println!(
-        "Pratyantara Dasha: {} ({:.2} years)",
-        dashas.pratyantara_dasha.planet, dashas.pratyantara_dasha.years
-    );
-
-    // Calculate Yogas
-    let yogas = calculate_all_yogas(&planets, asc_sid_deg)?;
-    println!("\n--- YOGAS ---");
-    for yoga in yogas {
-        println!("{} (Strength: {:.2})", yoga.name, yoga.strength);
-        println!("  {}", yoga.description);
-    }
-
-    // Calculate Ashtakavarga
-    let ashtakavarga = calculate_complete_ashtakavarga(&planets)?;
-    println!("\n--- ASHTAKAVARGA BINDUS ---");
-    println!("Sign:      1  2  3  4  5  6  7  8  9  10 11 12");
-    println!(
-        "Sun:       {}",
-        ashtakavarga
-            .sun
-            .iter()
-            .map(|&n| format!("{:2}", n))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    println!(
-        "Moon:      {}",
-        ashtakavarga
-            .moon
-            .iter()
-            .map(|&n| format!("{:2}", n))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    println!(
-        "Mars:      {}",
-        ashtakavarga
-            .mars
-            .iter()
-            .map(|&n| format!("{:2}", n))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    println!(
-        "Mercury:   {}",
-        ashtakavarga
-            .mercury
-            .iter()
-            .map(|&n| format!("{:2}", n))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    println!(
-        "Jupiter:   {}",
-        ashtakavarga
-            .jupiter
-            .iter()
-            .map(|&n| format!("{:2}", n))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    println!(
-        "Venus:     {}",
-        ashtakavarga
-            .venus
-            .iter()
-            .map(|&n| format!("{:2}", n))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    println!(
-        "Saturn:    {}",
-        ashtakavarga
-            .saturn
-            .iter()
-            .map(|&n| format!("{:2}", n))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    println!(
-        "Sarva:     {}",
-        ashtakavarga
-            .sarva
-            .iter()
-            .map(|&n| format!("{:2}", n))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-
-    // Calculate House Strengths
-    let house_strengths = calculate_house_strengths(&planets, asc_sid_deg)?;
-    println!("\n--- HOUSE STRENGTHS ---");
-    for strength in house_strengths {
-        println!(
-            "House {}: Strength = {:.2}, Significator = {:.2}",
-            strength.house_number, strength.strength, strength.significator_strength
-        );
+        for yoga in yogas {
+            yoga_table.add_row(Row::new(vec![
+                Cell::new(&yoga.name),
+                Cell::new(&format!("{:.2}", yoga.strength)),
+                Cell::new(&yoga.description),
+            ]));
+        }
+        yoga_table.printstd();
     }
 
     Ok(())
