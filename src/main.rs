@@ -1,7 +1,9 @@
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use vsop::{
-    calculate_ayanamsa, get_emb, get_jupiter, get_ketu, get_mars, get_mercury, get_moon, get_neptune, get_rahu, get_saturn, get_sun, get_uranus, get_venus, tropical_to_sidereal
+    calculate_ayanamsa, calculate_lahiri_ayanamsa, get_emb, get_jupiter, get_ketu, get_mars,
+    get_mercury, get_moon, get_neptune, get_rahu, get_saturn, get_sun, get_uranus, get_venus,
+    normalize_degrees, normalize_radians, tropical_to_sidereal,
 };
 
 ///////////////////////////////////////////////////////////////////////////
@@ -15,58 +17,6 @@ const RAD_TO_DEG: f64 = 180.0 / PI;
 const J2000: f64 = 2451545.0; // Reference epoch
 const AYANAMSA_2000: f64 = 23.8625750; // Lahiri ayanamsa at J2000
 const PRECESSION_RATE: f64 = 50.2388475 / 3600.0; // Precession rate in degrees per century
-
- 
-
-/// Convert a Gregorian date/time to Julian Day (UTC).
-/// This is 100% accurate, and fully compliant with the Julian Day standard.
-/// and considers leap seconds.
-pub fn date_to_jd(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> f64 {
-    let mut y = year as f64;
-    let mut m = month as f64;
-    let d = day as f64;
-    let h = hour as f64;
-    let min = minute as f64;
-    let s = second as f64;
-
-    // Adjust month and year for January/February
-    if m <= 2.0 {
-        y -= 1.0;
-        m += 12.0;
-    }
-
-    // Calculate A and B terms for Julian/Gregorian calendar
-    let a = (y / 100.0).floor();
-    let b = 2.0 - a + (a / 4.0).floor();
-
-    // Calculate Julian Day
-    let jd = (365.25 * (y + 4716.0)).floor() + (30.6001 * (m + 1.0)).floor() + d + b - 1524.5
-        + h / 24.0
-        + min / 1440.0
-        + s / 86400.0;
-
-    jd
-}
-
-
-
- 
-
-/// Utility: Normalize an angle to [0, 360°).
-pub fn normalize_degrees(deg: f64) -> f64 {
-    deg.rem_euclid(360.0)
-}
-
-/// Utility: Convert an angle in radians to [0, 2π).
-pub fn normalize_radians(mut r: f64) -> f64 {
-    while r < 0.0 {
-        r += 2.0 * PI;
-    }
-    while r >= 2.0 * PI {
-        r -= 2.0 * PI;
-    }
-    r
-}
 
 /// Return the day of week as a string (Vāra),
 pub fn weekday_string(jd: f64) -> &'static str {
@@ -727,6 +677,8 @@ pub enum VedicError {
     InvalidDivisionalChart(String),
     CalculationError(String),
     DataError(String),
+    UnsupportedTimezone(String),
+    InvalidTimezoneOffset(String),
 }
 
 impl std::error::Error for VedicError {}
@@ -744,11 +696,15 @@ impl std::fmt::Display for VedicError {
             }
             VedicError::CalculationError(msg) => write!(f, "Calculation error: {}", msg),
             VedicError::DataError(msg) => write!(f, "Data error: {}", msg),
+            VedicError::UnsupportedTimezone(tz) => write!(f, "Unsupported timezone: {}", tz),
+            VedicError::InvalidTimezoneOffset(tz) => write!(f, "Invalid timezone offset: {}", tz),
         }
     }
 }
 
-/// Main configuration struct for horoscope calculations
+use chrono::{FixedOffset, NaiveDateTime, Offset, TimeZone};
+use std::error::Error;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BirthData {
     pub datetime: DateTime<Utc>,
@@ -783,16 +739,62 @@ impl BirthData {
         })
     }
 
-    /// Converts the birth data to Julian Day
-    pub fn to_jd(&self) -> f64 {
-        date_to_jd(
-            self.datetime.year() as i32,
-            self.datetime.month() as u32,
-            self.datetime.day() as u32,
-            self.datetime.hour() as u32,
-            self.datetime.minute() as u32,
-            self.datetime.second() as u32,
-        )
+    /// Converts the birth data to Julian Day, accounting for timezone and coordinates
+    pub fn to_jd(&self) -> Result<f64> {
+        // Parse the timezone string to get offset
+        let offset_hours = if self.timezone.starts_with("UTC") || self.timezone.starts_with("GMT") {
+            self.timezone[3..].parse::<f64>().unwrap_or(0.0)
+        } else {
+            // Handle named timezones
+            match self.timezone.as_str() {
+                "Asia/Kolkata" | "IST" => 5.5,
+                "Europe/London" | "BST" => 1.0,
+                "America/New_York" | "EST" => -5.0,
+                "America/Los_Angeles" | "PST" => -8.0,
+                // Add more timezone mappings as needed
+                _ => return Err(VedicError::UnsupportedTimezone(self.timezone.clone())),
+            }
+        };
+
+        // Convert offset to minutes and create FixedOffset
+        let offset_minutes = (offset_hours * 60.0) as i32;
+        let timezone_offset = FixedOffset::east_opt(offset_minutes * 60)
+            .ok_or(VedicError::InvalidTimezoneOffset(self.timezone.clone()))?;
+
+        // Convert UTC datetime to local time using the offset
+        let local_dt = self.datetime.with_timezone(&timezone_offset);
+
+        // Calculate JD using Meeus formula
+        let year = local_dt.year() as f64;
+        let month = local_dt.month() as f64;
+        let day = local_dt.day() as f64;
+        let hour = local_dt.hour() as f64;
+        let minute = local_dt.minute() as f64;
+        let second = local_dt.second() as f64;
+        let nanosecond = local_dt.nanosecond() as f64;
+
+        // Adjust for months after February
+        let (y, m) = if month <= 2.0 {
+            (year - 1.0, month + 12.0)
+        } else {
+            (year, month)
+        };
+
+        // Calculate Julian Day
+        let a = (y / 100.0).floor();
+        let b = 2.0 - a + (a / 4.0).floor();
+
+        let jd = (365.25 * (y + 4716.0)).floor() + (30.6001 * (m + 1.0)).floor() + day + b - 1524.5
+            + hour / 24.0
+            + minute / 1440.0
+            + second / 86400.0
+            + nanosecond / 86400000000000.0;
+
+        // Local time correction based on longitude
+        // Each degree of longitude = 4 minutes of time
+        let time_correction = self.longitude * 4.0 / (24.0 * 60.0);
+
+        Ok(jd + time_correction)
     }
 }
 
@@ -2483,28 +2485,27 @@ fn is_debilitated(planet: &PlanetPosition) -> bool {
     }
 }
 
+use chrono_tz::Asia::{Calcutta, Kolkata};
+
 fn main() -> Result<()> {
-    // Birth Details
-    let year = 1991;
-    let month = 6;
-    let day = 18;
-    let hour = 7;
-    let minute = 10;
-    let second = 0;
-    let geo_long_deg = 76.97; // Calicut, Kerala - East longitude
-    let geo_lat_deg = 10.80; // North latitude
-    let timezone = "Asia/Kolkata".to_string();
+    // Aghil Born 18th June 1991 07:10 AM IST Calicut, Kerala, India (76.97°E, 10.80°N)
+    let aghils_birth_data: BirthData = BirthData {
+        datetime: Calcutta.with_ymd_and_hms(1991, 6, 18, 7, 10, 00).unwrap().to_utc(),
+        longitude: 76.97,
+        latitude: 10.80,
+        timezone: "Asia/Kolkata".to_string(),
+    };
 
     println!("\n=== VEDIC BIRTH CHART CALCULATIONS ===");
     println!("Name: AGHIL MOHAN");
     println!("Date: June 18th, 1991");
     println!("Time: 07:10 AM");
     println!("Place: Calicut, Kerala, India");
-    println!("Coordinates: {}°E, {}°N", geo_long_deg, geo_lat_deg);
-    println!("Timezone: {}", timezone);
+    println!("Coordinates: {}°E, {}°N", aghils_birth_data.longitude, aghils_birth_data.latitude);
+    println!("Timezone: {}", aghils_birth_data.timezone);
 
     // Calculate Julian Day
-    let jd = date_to_jd(year, month, day, hour, minute, second);
+    let jd = aghils_birth_data.to_jd()?;
     println!("\n--- BASIC TIME CALCULATIONS ---");
     println!("Julian Day: {:.6}", jd);
 
@@ -2513,7 +2514,7 @@ fn main() -> Result<()> {
     println!("Ayanamsa: {:.6}°", ayanamsa * RAD_TO_DEG);
 
     // Calculate Ascendant
-    let asc_sid_deg = compute_ascendant_sidereal(jd, geo_lat_deg, geo_long_deg);
+    let asc_sid_deg = compute_ascendant_sidereal(jd, aghils_birth_data.latitude, aghils_birth_data.longitude);
     println!("\n--- ASCENDANT ---");
     let (asc_rasi, asc_deg, asc_min, asc_sec) = rasi_details(asc_sid_deg);
     println!(
@@ -2596,7 +2597,10 @@ fn main() -> Result<()> {
 
     // Calculate Planetary Strengths
     println!("\n--- PLANETARY STRENGTHS ---");
-    println!("{:<10} ST   |   DB   |   KB   |   DB   |   NS   |   TS  ", "Planet");
+    println!(
+        "{:<10} ST   |   DB   |   KB   |   DB   |   NS   |   TS  ",
+        "Planet"
+    );
     for planet in &planets {
         if planet.name == "Sun"
             || planet.name == "Moon"
